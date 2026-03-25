@@ -1,0 +1,195 @@
+-- Questão 1: Receita e Lucro Bruto por Categoria
+-- Objetivo: Identificar quais categorias de produtos geram o maior volume financeiro e, principalmente, qual deixa a maior margem de lucro bruto absoluto na empresa. Considere apenas pedidos com status 'Entregue' ou 'Enviado'.
+select c.nome_categoria, sum(ip.quantidade * ip.preco_unitario) as volume_financeiro,
+ SUM(ip.quantidade * (ip.preco_unitario - p.custo_compra)) AS lucro_bruto
+
+ from produtos p
+
+join categorias c on p.categoria_id = c.categoria_id
+join itens_pedido ip on p.produto_id = ip.produto_id
+join pedidos pd on ip.pedido_id = pd.pedido_id
+
+where pd.status_pedido in ( 'Entregue', 'Enviado') 
+
+group by c.categoria_id, c.nome_categoria
+
+order by lucro_bruto desc;
+
+
+-- Questão 2: Comportamento de Compra por Estado (Ticket Médio)
+-- Objetivo: Mapear o perfil financeiro regional. Descubra o Ticket Médio (valor médio por pedido) gasto por clientes de cada estado e ordene do maior para o menor.
+WITH total_p AS (
+    SELECT 
+        pd.pedido_id, 
+        cl.estado, 
+        SUM(ip.quantidade * ip.preco_unitario) AS total 
+    FROM itens_pedido ip
+    JOIN pedidos pd ON ip.pedido_id = pd.pedido_id
+    JOIN clientes cl ON pd.cliente_id = cl.cliente_id
+    WHERE pd.status_pedido IN ('Entregue', 'Enviado')
+    GROUP BY pd.pedido_id, cl.estado
+)
+
+SELECT 
+    estado,
+    ROUND(AVG(total), 2) AS ticket_medio
+FROM total_p
+GROUP BY estado
+ORDER BY ticket_medio DESC;
+
+
+-- Questão 3: Taxa de Conversão de Pagamentos
+-- Objetivo: Avaliar a eficiência dos métodos de pagamento. Qual é o percentual de sucesso (pagamentos concluídos, ou seja, com data_pagamento não nula) agrupado por cada método de pagamento?
+select metodo_pagamento,
+round((count(case  when data_pagamento is not null then 1 end) * 100.00)
+/ count(*), 2) as percentual_sucesso from pagamentos
+
+group by metodo_pagamento
+
+order by percentual_sucesso desc;
+
+
+-- Questão 4: Crescimento de Receita (Month-over-Month)
+-- Objetivo: Medir a saúde financeira ao longo do tempo. Calcule a receita total por mês e adicione uma coluna mostrando a variação percentual (crescimento ou queda) em relação ao mês imediatamente anterior.
+WITH total AS (
+    SELECT 
+        DATE_FORMAT(pd.data_pedido, '%Y-%m') AS mes,
+        SUM(ip.quantidade * ip.preco_unitario) AS total 
+    FROM itens_pedido ip
+    JOIN pedidos pd ON ip.pedido_id = pd.pedido_id
+    WHERE pd.status_pedido IN ('Entregue', 'Enviado')
+      AND YEAR(pd.data_pedido) = 2025
+    GROUP BY DATE_FORMAT(pd.data_pedido, '%Y-%m')
+),
+
+calc AS (
+    SELECT *,
+        LAG(total) OVER (ORDER BY mes) AS total_mes_anterior
+    FROM total
+)
+
+SELECT mes,total,
+CASE WHEN total_mes_anterior IS NULL THEN 0
+    ELSE ROUND((total - total_mes_anterior) * 100.0 / nullif(total_mes_anterior,0), 2) 
+END as variacao_percentual
+FROM calc;
+
+
+-- Questão 5: Pareto de Faturamento de Produtos
+-- Objetivo: Identificar os produtos "curva A". Calcule qual o percentual de contribuição de cada produto em relação ao faturamento total da loja. Mostre os nomes dos produtos ordenados pelo percentual de contribuição decrescente.
+    with total_p as (
+    SELECT p.nome_produto,
+        SUM(ip.quantidade * ip.preco_unitario) AS total 
+    FROM itens_pedido ip
+    
+    join produtos p on ip.produto_id = p.produto_id
+    JOIN pedidos pd ON ip.pedido_id = pd.pedido_id
+    
+    WHERE pd.status_pedido IN ('Entregue', 'Enviado')
+    
+    GROUP BY p.produto_id, p.nome_produto
+    )
+    
+    select *,
+    round((total * 100.0) 
+    / 
+    nullif((select SUM(ip.quantidade * ip.preco_unitario) FROM itens_pedido ip
+    JOIN pedidos pd ON ip.pedido_id = pd.pedido_id
+    WHERE pd.status_pedido IN ('Entregue', 'Enviado')
+    ),0), 2) as percentual
+    from total_p
+
+    order by percentual desc;
+
+
+-- Questão 6: Análise de Recência e Retenção (LTV)
+-- Objetivo: Entender o engajamento dos clientes. Para cada cliente que já fez mais de uma compra, calcule a quantidade total de pedidos realizados e o intervalo (em dias) entre o primeiro e o último pedido.
+    SELECT c.nome_cliente,
+        count(DISTINCT ip.pedido_id) AS total,
+        datediff(max(pd.data_pedido), min(pd.data_pedido)) as intervalo_dias
+    FROM itens_pedido ip
+    
+    JOIN pedidos pd ON ip.pedido_id = pd.pedido_id
+    join clientes c on pd.cliente_id = c.cliente_id
+    WHERE pd.status_pedido IN ('Entregue', 'Enviado')
+    
+    GROUP BY c.cliente_id, c.nome_cliente
+    having count(DISTINCT ip.pedido_id) > 1;
+
+
+-- Questão 7: Distorções de Gastos (Média vs. Mediana)
+-- Objetivo: Validar estatisticamente se o ticket médio da loja é puxado por "outliers" (pedidos muito caros). Escreva uma consulta que retorne, lado a lado, o valor médio geral dos pedidos e o valor mediano geral dos pedidos pagos.
+WITH pedidos_totais AS (
+    SELECT pd.pedido_id, SUM(ip.quantidade * ip.preco_unitario) AS total
+    FROM itens_pedido ip
+    JOIN pedidos pd ON ip.pedido_id = pd.pedido_id
+    JOIN pagamentos pm ON pd.pedido_id = pm.pedido_id AND pm.data_pagamento IS NOT NULL
+    WHERE pd.status_pedido IN ('Entregue', 'Enviado')
+    GROUP BY pd.pedido_id
+),
+
+ordenado AS (
+    SELECT total, 
+        ROW_NUMBER() OVER (ORDER BY total) AS rn,
+        COUNT(*) OVER () AS total_linhas
+    FROM pedidos_totais
+)
+
+SELECT (SELECT ROUND(AVG(total), 2) FROM pedidos_totais) AS media,
+    ROUND(AVG(total), 2) AS mediana
+FROM ordenado
+WHERE rn IN (
+    FLOOR((total_linhas + 1) / 2),
+    CEIL((total_linhas + 1) / 2)
+);
+
+
+-- Questão 8: Produtos com Margem de Lucro Crítica
+-- Objetivo: Otimizar o portfólio. Liste os produtos cujo lucro percentual unitário ((preco_venda - custo_compra) / preco_venda) seja inferior a 50%.
+SELECT 
+    p.nome_produto,
+    ROUND(
+        (p.preco_venda - p.custo_compra) * 100.0 / p.preco_venda,
+    2) AS margem_percentual
+FROM produtos p
+WHERE (p.preco_venda - p.custo_compra) / p.preco_venda < 0.5;
+
+
+-- Questão 9: Comparação de Novos vs. Antigos Clientes
+-- Objetivo: Avaliar a velocidade de ativação. Encontre o tempo médio (em dias) que os clientes demoram entre a data em que criaram o cadastro no site (data_cadastro) e a data em que realizaram o primeiro pedido.
+with fil as (
+select c.nome_cliente,
+datediff(min(p.data_pedido), c.data_cadastro) as dif
+ from clientes c
+
+join pedidos p on c.cliente_id = p.cliente_id
+
+ WHERE p.status_pedido IN ('Entregue', 'Enviado')
+
+group by c.cliente_id, c.nome_cliente, c.data_cadastro
+)
+
+select round(avg(dif), 2) as tempo_medio
+ from fil;
+
+
+-- Questão 10: Ranking de Penetração por Categoria (Window Function)
+-- Objetivo: Análise de mix de produtos. Dentro de cada Estado, classifique (rank) as categorias de produtos com base no volume financeiro total vendido, sendo o "Rank 1" a categoria mais vendida naquele estado.
+    with total as (
+    SELECT cl.estado, c.nome_categoria, 
+        SUM(ip.quantidade * ip.preco_unitario) AS total 
+    FROM itens_pedido ip
+    JOIN pedidos pd ON ip.pedido_id = pd.pedido_id
+    JOIN clientes cl ON pd.cliente_id = cl.cliente_id
+    join produtos p on ip.produto_id = p.produto_id
+    join categorias c on p.categoria_id = c.categoria_id
+    
+    WHERE pd.status_pedido IN ('Entregue', 'Enviado')
+    GROUP BY  cl.estado, c.categoria_id, c.nome_categoria
+)
+
+select *,
+dense_rank() over (partition by estado order by total desc) as ranking
+ from total
+ 
+ ORDER BY estado, ranking;
