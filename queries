@@ -193,3 +193,29 @@ dense_rank() over (partition by estado order by total desc) as ranking
  from total
  
  ORDER BY estado, ranking;
+
+
+--  Questão 11: Clientes Inativos (Zero Compras)
+-- Objetivo: Identificar leads cadastrados que nunca converteram para criar campanhas de e-mail marketing focadas na primeira compra. 
+-- Retorne o nome e o estado dos clientes que se cadastraram, mas não possuem nenhum pedido registrado.
+
+select c.nome_cliente, c.estado from clientes c
+
+left join pedidos p on c.cliente_id = p.cliente_id 
+
+where p.pedido_id is null;
+
+
+-- Questão 12: Taxa de Cancelamento por Estado
+-- Objetivo: Entender se há problemas logísticos regionais ou fraudes de cartão que elevam a proporção de cancelamentos.
+-- Calcule a porcentagem de pedidos com status 'Cancelado' em relação ao total de pedidos, agrupado por estado.
+select c.estado,
+round(100.0 * count(case when status_pedido = 'Cancelado' then 1 end)
+/
+count(*),2) as porcentagem
+ from pedidos p  
+
+join clientes c on p.cliente_id = c.cliente_id
+
+group by c.estado
+order by porcentagem desc;
