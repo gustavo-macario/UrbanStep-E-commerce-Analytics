@@ -219,3 +219,157 @@ join clientes c on p.cliente_id = c.cliente_id
 
 group by c.estado
 order by porcentagem desc;
+
+
+-- Questão 13: Tempo de Compensação por Método de Pagamento
+-- Objetivo: Avaliar o impacto operacional no fluxo de caixa. Calcule a média de dias que leva entre a data do pedido (data_pedido) e a data em que o dinheiro realmente entra (data_pagamento), agrupado pelo método de pagamento. 
+-- Ignore os pagamentos não realizados.
+SELECT 
+    pg.metodo_pagamento,
+    ROUND(AVG(DATEDIFF(pg.data_pagamento, p.data_pedido)), 2) AS media_dias
+FROM pedidos p
+JOIN pagamentos pg 
+    ON p.pedido_id = pg.pedido_id
+WHERE pg.data_pagamento IS NOT NULL
+GROUP BY pg.metodo_pagamento;
+
+
+-- Questão 14: Diversidade de Carrinho (Cross-selling)
+-- Objetivo: Medir a eficácia das recomendações do site ("Quem comprou X também levou Y"). Descubra quantos pedidos distintos contêm itens de mais de uma categoria diferente.
+SELECT COUNT(*) as pedidos
+FROM (
+    SELECT ip.pedido_id
+    FROM produtos p
+    JOIN categorias c ON p.categoria_id = c.categoria_id
+    JOIN itens_pedido ip ON p.produto_id = ip.produto_id
+    GROUP BY ip.pedido_id
+    HAVING COUNT(DISTINCT p.categoria_id) > 1
+) a;
+
+
+
+-- Questão 15: Sazonalidade Semanal (Dias de Pico)
+-- Objetivo: Otimizar as campanhas de tráfego pago (Ads) e o plantão da equipe de suporte. Identifique qual dia da semana (ex: Segunda, Terça, etc.) gera o maior volume total de faturamento na loja.
+
+SELECT 
+    CASE 
+        WHEN DAYOFWEEK(p.data_pedido) = 1 THEN 'Domingo'
+        WHEN DAYOFWEEK(p.data_pedido) = 2 THEN 'Segunda'
+        WHEN DAYOFWEEK(p.data_pedido) = 3 THEN 'Terça-feira'
+        WHEN DAYOFWEEK(p.data_pedido) = 4 THEN 'Quarta-feira'
+        WHEN DAYOFWEEK(p.data_pedido) = 5 THEN 'Quinta-feira'
+        WHEN DAYOFWEEK(p.data_pedido) = 6 THEN 'Sexta-feira'
+        WHEN DAYOFWEEK(p.data_pedido) = 7 THEN 'Sábado'
+    END AS dia_semana,
+    
+    SUM(ip.quantidade * ip.preco_unitario) AS total
+
+FROM pedidos p
+JOIN itens_pedido ip ON p.pedido_id = ip.pedido_id 
+
+GROUP BY dia_semana
+ORDER BY total DESC;
+
+
+-- Questão 16: Curva de Clientes VIPs (Percentil/NTILE)
+-- Objetivo: Encontrar os "Heavy Users" (melhores clientes) para o lançamento de um clube de benefícios. Divida os clientes que já compraram em 4 grupos (quartis)
+-- baseados no valor total gasto e liste apenas os clientes que caíram no grupo "Top 1" (os 25% que mais gastam).
+WITH fil AS (
+    SELECT c.cliente_id, c.nome_cliente,
+        SUM(ip.quantidade * ip.preco_unitario) AS total
+    FROM pedidos p
+    JOIN itens_pedido ip  ON p.pedido_id = ip.pedido_id 
+    JOIN clientes c ON p.cliente_id = c.cliente_id
+    WHERE p.status_pedido IN ('Entregue', 'Enviado')
+    GROUP BY c.cliente_id, c.nome_cliente
+),
+
+cl AS (
+    SELECT cliente_id, nome_cliente,
+        NTILE(4) OVER (ORDER BY total DESC) AS gr
+    FROM fil
+)
+
+SELECT cliente_id, nome_cliente
+FROM cl 
+WHERE gr = 1;
+
+
+-- Questão 17: Taxa Global de Recompra (Repeat Rate)
+-- Objetivo: Medir a saúde da fidelização da marca. Calcule um único número: a proporção (em porcentagem) de clientes que realizaram 2 ou mais pedidos em relação ao total de clientes que realizaram pelo menos 1 pedido.
+with dois as (
+select 1 as qtde from clientes c 
+
+join pedidos p on c.cliente_id = p.cliente_id
+
+group by c.cliente_id
+having count(*) >=2
+),
+
+um as (
+select 1 as qtde from clientes c 
+
+join pedidos p on c.cliente_id = p.cliente_id
+
+group by c.cliente_id
+)
+
+select round(100.0 * sum(qtde) / nullif((select sum(qtde) from um),0), 2) as porcentagem
+from dois;
+
+
+-- Questão 18: Faturamento Acumulado (Running Total)
+-- Objetivo: Acompanhar o atingimento da meta financeira anual da diretoria. Crie uma visão cumulativa mostrando a data, a receita daquele dia e a soma contínua (running total) de toda a receita gerada até aquela data.
+with total_d as (
+select p.data_pedido,
+sum(ip.preco_unitario * ip.quantidade) as total
+ from itens_pedido ip 
+
+join pedidos p on ip.pedido_id = p.pedido_id
+
+WHERE p.status_pedido IN ('Entregue', 'Enviado')
+
+group by p.data_pedido
+)
+
+select data_pedido,
+total as receita_dia,
+sum(total) over (order by data_pedido asc) as acumulado
+ from total_d;
+
+
+-- Questão 19: Risco de Estoque (Baixa Margem e Baixa Saída)
+-- Objetivo: Identificar produtos que estão "encalhados" e não compensam o espaço no armazém. Encontre produtos que possuam uma margem de lucro unitária inferior a 40% E que tenham vendido um total de 3 unidades ou menos.
+with fil as (
+select p.nome_produto,
+SUM(ip.quantidade) as qtde,
+round(100.0 * (preco_venda - custo_compra) / nullif(preco_venda,0), 2) as total
+ from produtos p 
+
+join itens_pedido ip on p.produto_id = ip.produto_id
+
+group by p.produto_id, p.nome_produto
+having qtde <= 3 and total < 40
+)
+
+select nome_produto from fil;
+
+
+-- Questão 20: Histograma de Frequência de Compras
+-- Objetivo: Entender a distribuição do comportamento de compra. Crie um resumo estatístico que mostre a "Quantidade de Pedidos" (ex: 1, 2, 3) e o "Número de Clientes" que se encaixam exatamente naquela quantidade 
+-- (ex: 10 clientes fizeram 1 pedido, 4 clientes fizeram 2 pedidos, etc.).
+with fil as (
+select c.nome_cliente, count(*) as qtde
+ from clientes c 
+
+join pedidos p on c.cliente_id = p.cliente_id
+
+group by c.cliente_id, c.nome_cliente
+)
+
+select qtde as qtde_pedidos,
+count(*) as num_clientes
+ from fil
+
+group by qtde
+order by qtde_pedidos asc;
